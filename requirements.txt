@@ -1,3 +1,5 @@
+setuptools==80.9.0
+wheel
 accelerate==1.13.0
 aiofiles==24.1.0
 aliyun-python-sdk-core==2.16.0

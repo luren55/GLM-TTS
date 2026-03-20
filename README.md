@@ -47,8 +47,11 @@ Ensure you use Python 3.10 - Python 3.12 versions.
 git clone https://github.com/zai-org/GLM-TTS.git
 cd GLM-TTS
 
+# For torch-npu dev version or x86 machine
+pip config set global.extra-index-url "https://download.pytorch.org/whl/cpu/"
+
 # Install dependencies
-pip install -r requirements.txt
+python -m pip install -r requirements.txt --no-build-isolation
 
 # Install reinforcement learning related dependencies (optional)
 cd grpo/modules

@@ -99,7 +99,7 @@ class SpeechTokenizer:
 
             for start in range(0, len(audios), batch_size):
                 features = feature_extractor(audios[start: start + batch_size], sampling_rate=16000,
-                                             return_attention_mask=True, return_tensors="pt", device='cpu',
+                                             return_attention_mask=True, return_tensors="pt", device='cuda',
                                              padding="longest", pad_to_multiple_of=stride)
                 features = features.to(device="cuda")
                 outputs = model(**features)
@@ -627,28 +627,19 @@ class TTSFrontEnd:
         return torch.tensor(prompt_speech_tokens).to(self.device)
 
     def _extract_spk_embedding(self, speech: Union[str, torch.Tensor]) -> torch.Tensor:
-        # 1) 读音频
         if isinstance(speech, str):
-            speech = load_wav(speech, 16000)  # 期望返回 torch.Tensor
+            speech = load_wav(speech, 16000)
 
         if not isinstance(speech, torch.Tensor):
             speech = torch.tensor(speech)
 
-        # 2) 统一形状与类型：kaldi.fbank 建议 [channel, time]，float32，CPU
-        #    若是 [time] -> [1, time]
+        # kaldi.fbank 输入建议 [1, T]
         if speech.dim() == 1:
             speech = speech.unsqueeze(0)
-        elif speech.dim() == 2:
-            # 常见是 [channel, time]，若是 [time, channel] 可按需转置
-            # 这里假设 load_wav 返回 [channel, time]，不做转置
-            pass
-        else:
-            raise ValueError(f"Unsupported speech shape: {tuple(speech.shape)}")
 
-        # 关键：强制 CPU，避免 NPU 上 FFT/ABS 类算子报错
-        speech = speech.detach().to(device="cpu", dtype=torch.float32).contiguous()
+        # 关键：强制 CPU + float32，避免 NPU 上 complex abs 报错
+        speech = speech.detach().to("cpu", dtype=torch.float32).contiguous()
 
-        # 3) 提取 fbank（CPU）
         feat = kaldi.fbank(
             speech,
             num_mel_bins=80,
@@ -657,14 +648,13 @@ class TTSFrontEnd:
         )
         feat = feat - feat.mean(dim=0, keepdim=True)
 
-        # 4) ONNX 推理（numpy 必须在 CPU）
+        # ONNX 一般也是 CPU numpy
         input_name = self.campplus_session.get_inputs()[0].name
-        feat_np = feat.unsqueeze(0).cpu().numpy()  # [1, T, 80]
-        embedding_np = self.campplus_session.run(None, {input_name: feat_np})[0]  # shape 常见 [1, D] 或 [D]
-        embedding_np = embedding_np.reshape(1, -1).astype("float32")
+        emb_np = self.campplus_session.run(
+            None, {input_name: feat.unsqueeze(0).cpu().numpy()}
+        )[0].reshape(1, -1).astype("float32")
 
-        # 5) 转回 torch，并放到目标 device
-        embedding = torch.from_numpy(embedding_np).to(self.device)
+        embedding = torch.from_numpy(emb_np).to(self.device)
         return embedding
 
     def _extract_speech_feat(self, speech, sample_rate=24000):
